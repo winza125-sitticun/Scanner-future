@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: scanner-future
@@ -50,6 +51,7 @@ jobs:
         with:
           path: .scanner_state
           key: scanner-state-${{ github.run_id }}
+
           restore-keys: scanner-state-
       - run: mkdir -p .scanner_state
       - name: Run one scan cycle
@@ -60,3 +62,16 @@ jobs:
         with:
           path: .scanner_state
           key: scanner-state-${{ github.run_id }}
+
+  keepalive:
+    if: github.event_name != 'push'
+    needs: scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Wait approximately five minutes
+        run: sleep 300
+      - name: Queue next scan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run Scanner --repo "${{ github.repository }}" --ref main
