@@ -13,6 +13,7 @@ from market_data_v5 import (
     BinanceMarketDataProvider,
     BybitMarketDataProvider,
     MarketDataSession,
+    OkxMarketDataProvider,
     price_basis_within_tolerance,
     select_market_data_session,
 )
@@ -63,6 +64,7 @@ def create_market_data_session(
         providers = [
             BinanceMarketDataProvider(timeout=HTTP_TIMEOUT_SECONDS),
             BybitMarketDataProvider(timeout=HTTP_TIMEOUT_SECONDS),
+            OkxMarketDataProvider(timeout=HTTP_TIMEOUT_SECONDS),
         ]
     return select_market_data_session(
         providers,

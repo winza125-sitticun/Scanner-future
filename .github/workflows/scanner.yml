@@ -52,23 +52,6 @@ jobs:
           restore-keys: scanner-state-
       - run: mkdir -p .scanner_state
       - name: Run one scan cycle
-        run: |
-          python - <<'PY'
-          import requests
-
-          probes = [
-              ("BINANCE", "https://fapi.binance.com/fapi/v1/klines", {"symbol": "BTCUSDT", "interval": "1h", "limit": 2}),
-              ("BYBIT", "https://api.bybit.com/v5/market/kline", {"category": "linear", "symbol": "BTCUSDT", "interval": "60", "limit": 2}),
-              ("OKX", "https://www.okx.com/api/v5/market/candles", {"instId": "BTC-USDT-SWAP", "bar": "1H", "limit": 2}),
-          ]
-          for name, url, params in probes:
-              try:
-                  response = requests.get(url, params=params, timeout=8)
-                  print(f"PROBE {name}: HTTP {response.status_code} {response.text[:160]!r}")
-              except Exception as exc:
-                  print(f"PROBE {name}: {type(exc).__name__}: {exc}")
-          PY
-      - name: Run one scan cycle
         run: python run_once.py --state-file .scanner_state/recent_signals.json --limit 40
       - name: Save alert cooldown state
         if: always()
