@@ -4,6 +4,8 @@ from market_data_v5 import (
     MarketDataSnapshot,
     parse_bybit_tickers,
     parse_bybit_klines,
+    parse_okx_klines,
+    parse_okx_tickers,
     price_basis_within_tolerance,
     select_market_data_session,
 )
@@ -75,6 +77,59 @@ class TestBybitKlines(unittest.TestCase):
     def test_unsupported_interval_or_bad_payload_fails_closed(self):
         self.assertEqual(parse_bybit_klines({"retCode": 0, "result": {"list": []}}, "7h", now_ms=1), [])
         self.assertEqual(parse_bybit_klines({"retCode": 1}, "1h", now_ms=1), [])
+
+
+class TestOkxNormalization(unittest.TestCase):
+    def test_usdt_swaps_are_ranked_by_quote_volume_with_funding(self):
+        payload = {
+            "code": "0",
+            "data": [
+                {"instId": "ETH-USDT-SWAP", "last": "3000", "volCcy24h": "2"},
+                {"instId": "BTC-USDT-SWAP", "last": "60000", "volCcy24h": "1"},
+                {"instId": "BTC-USD-SWAP", "last": "60001", "volCcy24h": "999"},
+                {"instId": "USDC-USDT-SWAP", "last": "1", "volCcy24h": "99999"},
+            ],
+        }
+        funding = {
+            "BTC-USDT-SWAP": "0.0001",
+            "ETH-USDT-SWAP": "-0.00005",
+        }
+
+        snapshot = parse_okx_tickers(payload, funding, limit=2)
+
+        self.assertIsNotNone(snapshot)
+        self.assertEqual(snapshot.provider, "OKX")
+        self.assertEqual(snapshot.symbols, ["BTCUSDT", "ETHUSDT"])
+        self.assertEqual(snapshot.last_price["BTCUSDT"], 60000.0)
+        self.assertAlmostEqual(snapshot.funding_pct["BTCUSDT"], 0.01)
+        self.assertAlmostEqual(snapshot.funding_pct["ETHUSDT"], -0.005)
+
+    def test_missing_funding_or_malformed_payload_fails_closed(self):
+        payload = {
+            "code": "0",
+            "data": [{"instId": "BTC-USDT-SWAP", "last": "60000", "volCcy24h": "1"}],
+        }
+        self.assertIsNone(parse_okx_tickers(payload, {}, limit=1))
+        self.assertIsNone(parse_okx_tickers({"code": "1", "data": []}, {}, limit=1))
+
+
+class TestOkxKlines(unittest.TestCase):
+    def test_reverse_sorted_rows_are_normalized_and_unconfirmed_candle_is_dropped(self):
+        payload = {
+            "code": "0",
+            "data": [
+                ["7200000", "102", "108", "101", "107", "11", "1", "1100", "0"],
+                ["3600000", "100", "105", "95", "102", "10", "1", "1000", "1"],
+                ["0", "98", "103", "97", "100", "9", "1", "900", "1"],
+            ],
+        }
+
+        candles = parse_okx_klines(payload, interval="1h")
+
+        self.assertEqual(len(candles), 2)
+        self.assertEqual(candles[0]["open_time"], 0)
+        self.assertEqual(candles[1]["open_time"], 3_600_000)
+        self.assertEqual(candles[1]["close"], 102.0)
 
 
 class TestPriceBasisGuard(unittest.TestCase):
