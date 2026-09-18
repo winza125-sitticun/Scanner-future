@@ -107,5 +107,9 @@ class TestRunCycleUsesSelectedProvider(unittest.TestCase):
         self.assertEqual(result, {})
         self.assertEqual(
             provider.calls,
-            [("BTCUSDT", "1h", scanner.STRUCTURE_KLINE_LIMIT), ("BTCUSDT", "4h", scanner.STRUCTURE_KLINE_LIMIT)],
+            [
+                ("BTCUSDT", "4h", scanner.STRUCTURE_KLINE_LIMIT),
+                ("BTCUSDT", "1h", scanner.STRUCTURE_KLINE_LIMIT),
+                ("BTCUSDT", "15m", scanner.STRUCTURE_KLINE_LIMIT),
+            ],
         )

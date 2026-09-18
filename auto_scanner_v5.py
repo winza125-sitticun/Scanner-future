@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 import requests
 
 from setup_score_v5 import score_passes_threshold, score_setup
+from retest_strategy_v6 import analyze_retest_setup, format_watchlist_digest, rank_watchlist
 
 from market_data_v5 import (
     BinanceMarketDataProvider,
@@ -41,6 +42,8 @@ STRUCTURE_ATR_BUFFER_MULT = float(os.getenv("STRUCTURE_ATR_BUFFER_MULT", "0.25")
 MIN_STRUCTURE_RR = float(os.getenv("MIN_STRUCTURE_RR", "1.5"))
 MARKET_PRICE_BASIS_MAX_DIFF_PCT = float(os.getenv("MARKET_PRICE_BASIS_MAX_DIFF_PCT", "1.0"))
 MARKET_PROVIDER_PROBE_KLINE_LIMIT = int(os.getenv("MARKET_PROVIDER_PROBE_KLINE_LIMIT", "20"))
+WATCHLIST_SIZE = int(os.getenv("WATCHLIST_SIZE", "5"))
+WATCHLIST_CANDIDATE_LIMIT = int(os.getenv("WATCHLIST_CANDIDATE_LIMIT", "12"))
 
 BUY_RECS = {"BUY", "STRONG_BUY"}
 SELL_RECS = {"SELL", "STRONG_SELL"}
@@ -578,6 +581,65 @@ def _indicator(analysis, name: str) -> Optional[float]:
     return value if isinstance(value, (int, float)) else None
 
 
+def build_retest_watchlist(
+    market_session: MarketDataSession,
+    target_symbols: list[str],
+    *,
+    candidate_limit: int = WATCHLIST_CANDIDATE_LIMIT,
+    watchlist_size: int = WATCHLIST_SIZE,
+    candle_cache: Optional[Dict[tuple[str, str], list[Dict[str, Any]]]] = None,
+) -> list[Dict[str, Any]]:
+    """Analyze liquid candidates and rank the five closest high-quality retest plans."""
+    if candle_cache is None:
+        candle_cache = {}
+
+    candidates = target_symbols[: max(watchlist_size, candidate_limit)]
+    analyzed = []
+    for liquidity_rank, symbol in enumerate(candidates, start=1):
+        try:
+            series = {}
+            for interval in ("4h", "1h", "15m"):
+                key = (symbol, interval)
+                if key not in candle_cache:
+                    candle_cache[key] = market_session.provider.get_klines(
+                        symbol,
+                        interval,
+                        STRUCTURE_KLINE_LIMIT,
+                    )
+                series[interval] = candle_cache[key]
+
+            result = analyze_retest_setup(
+                candles_4h=series["4h"],
+                candles_1h=series["1h"],
+                candles_15m=series["15m"],
+                current_price=market_session.snapshot.last_price.get(symbol),
+                atr_period=STRUCTURE_ATR_PERIOD,
+                swing_window=STRUCTURE_SWING_WINDOW,
+                entry_zone_atr=0.10,
+                stop_buffer_atr=0.15,
+                max_chase_atr=0.50,
+            )
+        except Exception as exc:
+            print(f"  [!] {symbol}: retest watchlist data unavailable: {exc}")
+            result = analyze_retest_setup(
+                candles_4h=[],
+                candles_1h=[],
+                candles_15m=[],
+                current_price=market_session.snapshot.last_price.get(symbol),
+            )
+        result.update(
+            {
+                "symbol": symbol,
+                "liquidity_rank": liquidity_rank,
+                "funding": market_session.snapshot.funding_pct.get(symbol),
+                "data_provider": market_session.snapshot.provider,
+            }
+        )
+        analyzed.append(result)
+
+    return rank_watchlist(analyzed, limit=watchlist_size)
+
+
 def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] = None):
     if recent_signals is None:
         recent_signals = {}
@@ -596,6 +658,18 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
     funding_rates = market_session.snapshot.funding_pct
     provider_name = market_session.snapshot.provider
     print(f"[*] Market Data Provider: [{provider_name}] (locked for this scan cycle)")
+
+    candle_cache: Dict[tuple[str, str], list[Dict[str, Any]]] = {}
+    watchlist = build_retest_watchlist(
+        market_session,
+        target_symbols,
+        candle_cache=candle_cache,
+    )
+    digest = format_watchlist_digest(watchlist, provider=provider_name, scan_time=now_str)
+    if send_telegram_alert(digest):
+        print(f"[*] Top {len(watchlist)} retest watchlist sent to Telegram.")
+    else:
+        print("[x] Retest watchlist delivery failed; signal scan will continue.")
 
     tv_symbols = [f"BINANCE:{s}.P" for s in target_symbols]
 
@@ -681,8 +755,14 @@ def run_scan_cycle(limit: int = 40, recent_signals: Optional[Dict[str, float]] =
             if side == "SHORT" and rsi1 >= 65:
                 tags.append("RSI_OVERBOUGHT")
 
-        candles_1h = market_session.provider.get_klines(symbol, "1h", STRUCTURE_KLINE_LIMIT)
-        candles_4h = market_session.provider.get_klines(symbol, "4h", STRUCTURE_KLINE_LIMIT)
+        candles_1h = candle_cache.get((symbol, "1h"))
+        if candles_1h is None:
+            candles_1h = market_session.provider.get_klines(symbol, "1h", STRUCTURE_KLINE_LIMIT)
+            candle_cache[(symbol, "1h")] = candles_1h
+        candles_4h = candle_cache.get((symbol, "4h"))
+        if candles_4h is None:
+            candles_4h = market_session.provider.get_klines(symbol, "4h", STRUCTURE_KLINE_LIMIT)
+            candle_cache[(symbol, "4h")] = candles_4h
         if len(candles_1h) < STRUCTURE_ATR_PERIOD + 1 or not candles_4h:
             print(f"  [x] {symbol}: missing closed {provider_name} kline history -> structure REJECT")
             continue

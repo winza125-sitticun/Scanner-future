@@ -23,7 +23,7 @@ class FakeProvider:
 
 
 class TestScoringGateBeforeAstra(unittest.TestCase):
-    def test_score_below_threshold_never_calls_astra_or_telegram(self):
+    def test_score_below_threshold_skips_astra_and_individual_alert(self):
         provider = FakeProvider()
         snapshot = MarketDataSnapshot(
             provider="BYBIT",
@@ -78,14 +78,16 @@ class TestScoringGateBeforeAstra(unittest.TestCase):
              patch.object(scanner, "build_structure_trade_plan", return_value=plan), \
              patch.object(scanner, "score_setup", return_value=low_score) as scoring, \
              patch.object(scanner, "analyze_with_ai", side_effect=AssertionError("Astra must not be called")), \
-             patch.object(scanner, "send_telegram_alert", side_effect=AssertionError("Telegram must not be called")), \
+             patch.object(scanner, "send_telegram_alert", return_value=True) as telegram, \
              patch.dict(sys.modules, {"tradingview_ta": fake_tv}):
             result = scanner.run_scan_cycle(limit=1, recent_signals={})
 
         self.assertEqual(result, {})
         scoring.assert_called_once()
+        telegram.assert_called_once()
+        self.assertIn("TOP 5 RETEST WATCHLIST", telegram.call_args.args[0])
 
-    def test_astra_wait_never_sends_telegram(self):
+    def test_astra_wait_sends_watchlist_but_not_individual_alert(self):
         provider = FakeProvider()
         snapshot = MarketDataSnapshot(
             provider="BYBIT",
@@ -121,12 +123,14 @@ class TestScoringGateBeforeAstra(unittest.TestCase):
              patch.object(scanner, "build_structure_trade_plan", return_value=plan), \
              patch.object(scanner, "score_setup", return_value=high_score), \
              patch.object(scanner, "analyze_with_ai", return_value=wait) as astra, \
-             patch.object(scanner, "send_telegram_alert", side_effect=AssertionError("WAIT must not alert")), \
+             patch.object(scanner, "send_telegram_alert", return_value=True) as telegram, \
              patch.dict(sys.modules, {"tradingview_ta": fake_tv}):
             result = scanner.run_scan_cycle(limit=1, recent_signals={})
 
         self.assertEqual(result, {})
         astra.assert_called_once()
+        telegram.assert_called_once()
+        self.assertIn("TOP 5 RETEST WATCHLIST", telegram.call_args.args[0])
 
 
 if __name__ == "__main__":

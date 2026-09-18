@@ -1,9 +1,27 @@
-# Auto Scanner V5 - Deterministic Setup Score + Astra Final Decision
+# Auto Scanner V6 - Multi-timeframe Retest Watchlist + V5 Signal Gate
 
 Decision-support scanner only. This package does **not** place exchange orders.
 
-## What changed from V4
-V5 keeps the V2-V4 fail-closed filters, Structure Engine, and Binance -> Bybit market-data fallback, then adds a deterministic quality score **before** Astra/Gemini is called.
+## What changed in V6
+V6 keeps the V5 signal gate, then adds a five-coin digest on every scan. It analyzes the 12 most liquid provider symbols, ranks them by setup quality and distance to entry, and sends the best five even when every item is still waiting.
+
+The retest method is deterministic:
+
+- 4H and 1H must agree through confirmed HH/HL or LH/LL structure.
+- 15m must close through the latest 1H swing level.
+- A confirmed entry requires a later 15m retest/rejection of that level.
+- Entry is a zone of `breakout level ± 0.10 ATR(15m)`.
+- Stop is beyond the latest opposite 15m swing plus `0.15 ATR(15m)`.
+- TP1-TP3 come from the next 1H/4H swing levels.
+- If price moves more than `0.50 ATR(15m)` beyond the entry zone, status becomes `WAIT_NO_CHASE`.
+- Only breakouts within the latest 20 closed 15m candles are eligible.
+
+Possible digest statuses are `LONG_CONFIRMED`, `SHORT_CONFIRMED`, `WAIT_RETEST`, `WAIT_BREAKOUT`, `WAIT_NO_CHASE`, `NO_SETUP`, and `DATA_UNAVAILABLE`.
+
+The score is a **watchlist quality score, not a win-rate probability**.
+
+## V5 individual signal gate
+V5 keeps the V2-V4 fail-closed filters and Structure Engine, then adds a deterministic quality score **before** Astra/Gemini is called.
 
 The score is a **setup quality score, not a win-rate probability**. A score of 84/100 does not mean an 84% chance of profit.
 
@@ -27,7 +45,7 @@ Setup Score 0-100
         |
         +-- score < 75 / invalid --> WAIT
         |                         Astra is NOT called
-        |                         Telegram is NOT sent
+        |                         no individual signal alert
         |
         v
 Astra Devil's Advocate
@@ -75,6 +93,7 @@ TradingView remains the signal engine for 4H + 1H + 15m. Market-data providers a
 
 1. Binance USD-M
 2. Bybit V5 Linear fallback
+3. OKX USDT Swap fallback
 
 A provider must pass a BTC closed-candle health probe before the scan starts. Once selected, the same provider supplies universe, funding, provider last price, and 1H/4H candles for the entire scan cycle. Funding/candles are never silently mixed between exchanges in one cycle.
 
@@ -130,6 +149,8 @@ export STRUCTURE_SWING_WINDOW=2
 export STRUCTURE_ATR_PERIOD=14
 export STRUCTURE_ATR_BUFFER_MULT=0.25
 export MIN_STRUCTURE_RR=1.5
+export WATCHLIST_SIZE=5
+export WATCHLIST_CANDIDATE_LIMIT=12
 ```
 
 ## 7) Run tests
@@ -143,7 +164,7 @@ python auto_scanner_v5.py --interval 5 --limit 40
 ```
 
 ## Telegram output
-Approved alerts now include both deterministic and Astra layers, for example:
+Every scan sends the ranked retest watchlist. Approved individual alerts still include both deterministic and Astra layers, for example:
 
 ```text
 Setup Score: 84/100
@@ -160,7 +181,7 @@ Final Decision: LONG
 ```
 
 ## Fail-closed examples
-V5 sends no alert when any of these occurs:
+V6 does not send an individual trade signal when any of these occurs. The five-coin digest is still sent with a waiting/error status when provider data is sufficient to start the cycle:
 - no healthy market-data provider,
 - missing or stale critical provider data,
 - TradingView/provider basis exceeds tolerance,
